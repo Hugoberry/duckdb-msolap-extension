@@ -13,7 +13,19 @@ namespace duckdb {
 struct COLUMNDATA {
     DBSTATUS dwStatus;
     DBLENGTH dwLength;
-    VARIANT  var;
+    union {
+        INT16 i16Val;
+        INT32 i32Val;
+        INT64 i64Val;
+        float fltVal;
+        double dblVal;
+        VARIANT_BOOL boolVal;
+        DATE dateVal;
+        CY cyVal;
+        VARIANT varVal;
+        char strVal[4096]; // Buffer for string data
+        BYTE byteData[1];  // Generic byte data
+    } data;
 };
 
 class MSOLAPDB;
