@@ -147,9 +147,7 @@ unique_ptr<LocalTableFunctionState> MSOLAPInitLocalState(ExecutionContext& conte
     return std::move(result);
 }
 
-void MSOLAPScan(ClientContext& context,
-              TableFunctionInput& data,
-              DataChunk& output) {
+void MSOLAPScan(ClientContext& context, TableFunctionInput& data, DataChunk& output) {
     auto& bind_data = data.bind_data->Cast<MSOLAPBindData>();
     auto& state = data.local_state->Cast<MSOLAPLocalState>();
     
@@ -172,14 +170,82 @@ void MSOLAPScan(ClientContext& context,
             // Process all columns for this row
             for (idx_t col_idx = 0; col_idx < state.column_ids.size(); col_idx++) {
                 auto col_id = state.column_ids[col_idx];
+                auto &out_vec = output.data[col_idx];
+                
                 if (col_id == COLUMN_IDENTIFIER_ROW_ID) {
                     // Row ID column - this is a virtual column
-                    output.data[col_idx].SetValue(output_offset, Value::BIGINT(output_offset));
-                } else {
-                    // Regular column - get from the result set
-                    auto db_col_idx = col_id;
-                    auto value = state.stmt.GetValue(db_col_idx, bind_data.types[db_col_idx]);
-                    output.data[col_idx].SetValue(output_offset, value);
+                    FlatVector::GetData<int64_t>(out_vec)[output_offset] = output_offset;
+                    continue;
+                }
+                
+                // Regular column - get from the result set
+                auto db_col_idx = col_id;
+                
+                // Check if the value is NULL
+                if (state.stmt.IsNull(db_col_idx)) {
+                    FlatVector::Validity(out_vec).SetInvalid(output_offset);
+                    continue;
+                }
+                
+                // Get binding type for the column
+                auto column_type = state.stmt.column_types[db_col_idx];
+                
+            // Set the value directly based on binding type and output type
+            switch (bind_data.types[db_col_idx].id()) {
+                case LogicalTypeId::SMALLINT:
+                case LogicalTypeId::INTEGER:
+                case LogicalTypeId::BIGINT:
+                    if (column_type == MSOLAPColumnType::INTEGER) {
+                        FlatVector::GetData<int64_t>(out_vec)[output_offset] = state.stmt.GetInt64(db_col_idx);
+                    } else {
+                        // Need to convert
+                        FlatVector::GetData<int64_t>(out_vec)[output_offset] = 
+                            state.stmt.GetValue(db_col_idx, bind_data.types[db_col_idx]).GetValue<int64_t>();
+                    }
+                    break;
+                    
+                case LogicalTypeId::FLOAT:
+                case LogicalTypeId::DOUBLE:
+                    if (column_type == MSOLAPColumnType::FLOAT) {
+                        FlatVector::GetData<double>(out_vec)[output_offset] = state.stmt.GetDouble(db_col_idx);
+                    } else {
+                        FlatVector::GetData<double>(out_vec)[output_offset] = 
+                            state.stmt.GetValue(db_col_idx, bind_data.types[db_col_idx]).GetValue<double>();
+                    }
+                    break;
+                    
+                case LogicalTypeId::VARCHAR:
+                    if (column_type == MSOLAPColumnType::STRING) {
+                        FlatVector::GetData<string_t>(out_vec)[output_offset] = state.stmt.GetString(db_col_idx, out_vec);
+                    } else {
+                        auto str_val = state.stmt.GetValue(db_col_idx, bind_data.types[db_col_idx]).ToString();
+                        FlatVector::GetData<string_t>(out_vec)[output_offset] = 
+                            StringVector::AddString(out_vec, str_val);
+                    }
+                    break;
+                    
+                case LogicalTypeId::BOOLEAN:
+                    if (column_type == MSOLAPColumnType::BOOLEAN) {
+                        FlatVector::GetData<bool>(out_vec)[output_offset] = state.stmt.GetBoolean(db_col_idx);
+                    } else {
+                        FlatVector::GetData<bool>(out_vec)[output_offset] = 
+                            state.stmt.GetValue(db_col_idx, bind_data.types[db_col_idx]).GetValue<bool>();
+                    }
+                    break;
+                    
+                case LogicalTypeId::TIMESTAMP:
+                    if (column_type == MSOLAPColumnType::DATE) {
+                        FlatVector::GetData<timestamp_t>(out_vec)[output_offset] = state.stmt.GetTimestamp(db_col_idx);
+                    } else {
+                        FlatVector::GetData<timestamp_t>(out_vec)[output_offset] = 
+                            state.stmt.GetValue(db_col_idx, bind_data.types[db_col_idx]).GetValue<timestamp_t>();
+                    }
+                    break;
+                    
+                default:
+                    // For unsupported types, fall back to setting the value
+                    out_vec.SetValue(output_offset, state.stmt.GetValue(db_col_idx, bind_data.types[db_col_idx]));
+                    break;
                 }
             }
             

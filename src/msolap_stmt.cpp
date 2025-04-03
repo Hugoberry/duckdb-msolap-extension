@@ -161,69 +161,140 @@ void MSOLAPStatement::SetupBindings() {
     
     // Create bindings for each column
     bindings.resize(cColumns);
+    column_types.resize(cColumns);
     
     DWORD dwOffset = 0;
     
+    // First pass: calculate the buffer size needed and assign binding types
+    size_t total_buffer_size = 0;
+    
     for (DBORDINAL i = 0; i < cColumns; i++) {
-        // Determine buffer size and type based on column type
-        DWORD bufferSize = 0;
-        DBTYPE bindType = pColumnInfo[i].wType;
+        MSOLAPColumnType column_type;
+        size_t type_size = 0;
         
-        // Adjust type and buffer size based on the column data type
+        // Assign the appropriate column type based on column type
         switch (pColumnInfo[i].wType) {
+            case DBTYPE_I1:
             case DBTYPE_I2:
-                bufferSize = sizeof(INT16);
-                break;
             case DBTYPE_I4:
-                bufferSize = sizeof(INT32);
-                break;
             case DBTYPE_I8:
-                bufferSize = sizeof(INT64);
+            case DBTYPE_UI1:
+            case DBTYPE_UI2:
+            case DBTYPE_UI4:
+            case DBTYPE_UI8:
+            // case DBTYPE_INT:
+            // case DBTYPE_UINT:
+                column_type = MSOLAPColumnType::INTEGER;
+                type_size = sizeof(INT_DATA);
                 break;
+                
             case DBTYPE_R4:
-                bufferSize = sizeof(float);
-                break;
             case DBTYPE_R8:
-                bufferSize = sizeof(double);
-                break;
             case DBTYPE_CY:
-                bufferSize = sizeof(CY);
+            case DBTYPE_DECIMAL:
+            case DBTYPE_NUMERIC:
+                column_type = MSOLAPColumnType::FLOAT;
+                type_size = sizeof(FLOAT_DATA);
                 break;
+                
             case DBTYPE_BOOL:
-                bufferSize = sizeof(VARIANT_BOOL);
+                column_type = MSOLAPColumnType::BOOLEAN;
+                type_size = sizeof(BOOL_DATA);
                 break;
+                
             case DBTYPE_DATE:
-                bufferSize = sizeof(DATE);
+            case DBTYPE_DBDATE:
+            case DBTYPE_DBTIME:
+            case DBTYPE_DBTIMESTAMP:
+                column_type = MSOLAPColumnType::DATE;
+                type_size = sizeof(DATE_DATA);
                 break;
+                
             case DBTYPE_BSTR:
-                bufferSize = 4096; // Allocate a reasonable size for strings
+            case DBTYPE_STR:
+            case DBTYPE_WSTR:
+                column_type = MSOLAPColumnType::STRING;
+                type_size = sizeof(STRING_DATA);
                 break;
+                
             default:
-                // Use VARIANT for any types we don't handle specifically
-                bindType = DBTYPE_VARIANT;
-                bufferSize = sizeof(VARIANT);
+                // Fallback to VARIANT for unsupported or complex types
+                column_type = MSOLAPColumnType::VARIANT;
+                type_size = sizeof(VARIANT_DATA);
                 break;
         }
         
-        // Initialize binding fully
-        bindings[i].iOrdinal = pColumnInfo[i].iOrdinal;  // Use actual column ordinal
-        bindings[i].obValue = dwOffset + offsetof(COLUMNDATA, data);
-        bindings[i].obLength = dwOffset + offsetof(COLUMNDATA, dwLength);
-        bindings[i].obStatus = dwOffset + offsetof(COLUMNDATA, dwStatus);
+        column_types[i] = column_type;
+        total_buffer_size += type_size;
+        type_buffer_sizes.push_back(type_size);
+    }
+    
+    // Allocate a single buffer for all columns
+    pRowData = new BYTE[total_buffer_size];
+    memset(pRowData, 0, total_buffer_size);
+    
+    // Second pass: setup bindings with appropriate types
+    dwOffset = 0;
+    for (DBORDINAL i = 0; i < cColumns; i++) {
+        // Initialize binding common properties
+        bindings[i].iOrdinal = pColumnInfo[i].iOrdinal;
+        bindings[i].obValue = dwOffset + offsetof(INT_DATA, value); // This offset is adjusted below
+        bindings[i].obLength = dwOffset + offsetof(INT_DATA, dwLength);
+        bindings[i].obStatus = dwOffset + offsetof(INT_DATA, dwStatus);
         bindings[i].pTypeInfo = NULL;
         bindings[i].pObject = NULL;
         bindings[i].pBindExt = NULL;
-        bindings[i].cbMaxLen = bufferSize;
         bindings[i].dwFlags = 0;
         bindings[i].eParamIO = DBPARAMIO_NOTPARAM;
         bindings[i].dwPart = DBPART_VALUE | DBPART_LENGTH | DBPART_STATUS;
         bindings[i].dwMemOwner = DBMEMOWNER_CLIENTOWNED;
-        bindings[i].wType = bindType;
         bindings[i].bPrecision = 0;
         bindings[i].bScale = 0;
         
-        // Move to next COLUMNDATA structure
-        dwOffset += sizeof(COLUMNDATA);
+        // Store the buffer pointer for this column
+        type_buffers.push_back(pRowData + dwOffset);
+        
+        // Setup type-specific bindings
+        switch (column_types[i]) {
+            case MSOLAPColumnType::INTEGER:
+                bindings[i].wType = DBTYPE_I8;
+                bindings[i].cbMaxLen = sizeof(INT64);
+                bindings[i].obValue = dwOffset + offsetof(INT_DATA, value);
+                break;
+                
+            case MSOLAPColumnType::FLOAT:
+                bindings[i].wType = DBTYPE_R8;
+                bindings[i].cbMaxLen = sizeof(double);
+                bindings[i].obValue = dwOffset + offsetof(FLOAT_DATA, value);
+                break;
+                
+            case MSOLAPColumnType::BOOLEAN:
+                bindings[i].wType = DBTYPE_BOOL;
+                bindings[i].cbMaxLen = sizeof(BOOL);
+                bindings[i].obValue = dwOffset + offsetof(BOOL_DATA, value);
+                break;
+                
+            case MSOLAPColumnType::STRING:
+                bindings[i].wType = DBTYPE_WSTR;
+                bindings[i].cbMaxLen = sizeof(((STRING_DATA*)0)->data);
+                bindings[i].obValue = dwOffset + offsetof(STRING_DATA, data);
+                break;
+                
+            case MSOLAPColumnType::DATE:
+                bindings[i].wType = DBTYPE_DBTIMESTAMP;
+                bindings[i].cbMaxLen = sizeof(DBTIMESTAMP);
+                bindings[i].obValue = dwOffset + offsetof(DATE_DATA, value);
+                break;
+                
+            case MSOLAPColumnType::VARIANT:
+                bindings[i].wType = DBTYPE_VARIANT;
+                bindings[i].cbMaxLen = sizeof(VARIANT);
+                bindings[i].obValue = dwOffset + offsetof(VARIANT_DATA, var);
+                break;
+        }
+        
+        // Move to the next buffer position
+        dwOffset += type_buffer_sizes[i];
     }
     
     // Create the accessor with correct buffer size
@@ -231,17 +302,13 @@ void MSOLAPStatement::SetupBindings() {
         DBACCESSOR_ROWDATA,
         cColumns,
         bindings.data(),
-        dwOffset,
+        total_buffer_size,
         &hAccessor,
         NULL);
     
     if (FAILED(hr)) {
         throw MSOLAPException(hr, "Failed to create accessor");
     }
-    
-    // Allocate memory for row data
-    pRowData = new BYTE[dwOffset];
-    memset(pRowData, 0, dwOffset);
 }
 
 bool MSOLAPStatement::Execute() {
@@ -404,196 +471,89 @@ std::vector<std::string> MSOLAPStatement::GetColumnNames() const {
 }
 
 Value MSOLAPStatement::GetValue(DBORDINAL column, const LogicalType& type) {
-    if (!has_row) {
-        throw MSOLAPException("No current row");
-    }
-    
-    if (column >= cColumns) {
-        throw MSOLAPException("Column index out of range");
-    }
-    
-    // Calculate the offset to the COLUMNDATA structure for this column
-    COLUMNDATA* pColData = (COLUMNDATA*)(pRowData + (column * sizeof(COLUMNDATA)));
-    
-    // Get status
-    if (pColData->dwStatus != DBSTATUS_S_OK) {
-        // Handle NULL or error
+    if (IsNull(column)) {
         return Value(type);
     }
     
-    // Get value directly based on data type
-    DBTYPE columnType = pColumnInfo[column].wType;
-    
-    switch (type.id()) {
-        case LogicalTypeId::SMALLINT:
-            if (columnType == DBTYPE_I2)
-                return Value::SMALLINT(pColData->data.i16Val);
-            else if (columnType == DBTYPE_I4)
-                return Value::SMALLINT((int16_t)pColData->data.i32Val);
-            else if (columnType == DBTYPE_I8)
-                return Value::SMALLINT((int16_t)pColData->data.i64Val);
-            else if (columnType == DBTYPE_R4)
-                return Value::SMALLINT((int16_t)pColData->data.fltVal);
-            else if (columnType == DBTYPE_R8)
-                return Value::SMALLINT((int16_t)pColData->data.dblVal);
-            else if (columnType == DBTYPE_VARIANT)
-                return Value::SMALLINT((int16_t)ConvertVariantToInt64(&pColData->data.varVal));
-            break;
-            
-        case LogicalTypeId::INTEGER:
-            if (columnType == DBTYPE_I2)
-                return Value::INTEGER((int32_t)pColData->data.i16Val);
-            else if (columnType == DBTYPE_I4)
-                return Value::INTEGER(pColData->data.i32Val);
-            else if (columnType == DBTYPE_I8)
-                return Value::INTEGER((int32_t)pColData->data.i64Val);
-            else if (columnType == DBTYPE_R4)
-                return Value::INTEGER((int32_t)pColData->data.fltVal);
-            else if (columnType == DBTYPE_R8)
-                return Value::INTEGER((int32_t)pColData->data.dblVal);
-            else if (columnType == DBTYPE_VARIANT)
-                return Value::INTEGER((int32_t)ConvertVariantToInt64(&pColData->data.varVal));
-            break;
-            
-        case LogicalTypeId::BIGINT:
-            if (columnType == DBTYPE_I2)
-                return Value::BIGINT((int64_t)pColData->data.i16Val);
-            else if (columnType == DBTYPE_I4)
-                return Value::BIGINT((int64_t)pColData->data.i32Val);
-            else if (columnType == DBTYPE_I8)
-                return Value::BIGINT(pColData->data.i64Val);
-            else if (columnType == DBTYPE_R4)
-                return Value::BIGINT((int64_t)pColData->data.fltVal);
-            else if (columnType == DBTYPE_R8)
-                return Value::BIGINT((int64_t)pColData->data.dblVal);
-            else if (columnType == DBTYPE_VARIANT)
-                return Value::BIGINT(ConvertVariantToInt64(&pColData->data.varVal));
-            break;
-            
-        case LogicalTypeId::FLOAT:
-            if (columnType == DBTYPE_I2)
-                return Value::FLOAT((float)pColData->data.i16Val);
-            else if (columnType == DBTYPE_I4)
-                return Value::FLOAT((float)pColData->data.i32Val);
-            else if (columnType == DBTYPE_I8)
-                return Value::FLOAT((float)pColData->data.i64Val);
-            else if (columnType == DBTYPE_R4)
-                return Value::FLOAT(pColData->data.fltVal);
-            else if (columnType == DBTYPE_R8)
-                return Value::FLOAT((float)pColData->data.dblVal);
-            else if (columnType == DBTYPE_VARIANT)
-                return Value::FLOAT((float)ConvertVariantToDouble(&pColData->data.varVal));
-            break;
-            
-        case LogicalTypeId::DOUBLE:
-            if (columnType == DBTYPE_I2)
-                return Value::DOUBLE((double)pColData->data.i16Val);
-            else if (columnType == DBTYPE_I4)
-                return Value::DOUBLE((double)pColData->data.i32Val);
-            else if (columnType == DBTYPE_I8)
-                return Value::DOUBLE((double)pColData->data.i64Val);
-            else if (columnType == DBTYPE_R4)
-                return Value::DOUBLE((double)pColData->data.fltVal);
-            else if (columnType == DBTYPE_R8)
-                return Value::DOUBLE(pColData->data.dblVal);
-            else if (columnType == DBTYPE_CY)
-                return Value::DOUBLE(static_cast<double>(pColData->data.cyVal.int64) / 10000.0);
-            else if (columnType == DBTYPE_VARIANT)
-                return Value::DOUBLE(ConvertVariantToDouble(&pColData->data.varVal));
-            break;
-            
-        case LogicalTypeId::VARCHAR:
-            if (columnType == DBTYPE_BSTR) {
-                std::string str(pColData->data.strVal, pColData->dwLength);
-                Vector result_vec(LogicalType::VARCHAR);
-                return Value(StringVector::AddString(result_vec, str));
-            } else if (columnType == DBTYPE_VARIANT) {
-                Vector result_vec(LogicalType::VARCHAR);
-                return Value(ConvertVariantToString(&pColData->data.varVal, result_vec));
-            } else {
-                // Convert numeric types to string
-                std::string result;
-                switch (columnType) {
-                    case DBTYPE_I2: result = std::to_string(pColData->data.i16Val); break;
-                    case DBTYPE_I4: result = std::to_string(pColData->data.i32Val); break;
-                    case DBTYPE_I8: result = std::to_string(pColData->data.i64Val); break;
-                    case DBTYPE_R4: result = std::to_string(pColData->data.fltVal); break;
-                    case DBTYPE_R8: result = std::to_string(pColData->data.dblVal); break;
-                    default: result = "[Unsupported Type]"; break;
+    try {
+        switch (type.id()) {
+            case LogicalTypeId::SMALLINT:
+            case LogicalTypeId::INTEGER:
+            case LogicalTypeId::BIGINT:
+                if (column_types[column] == MSOLAPColumnType::INTEGER) {
+                    return Value::BIGINT(GetInt64(column));
                 }
-                Vector result_vec(LogicalType::VARCHAR);
-                return Value(StringVector::AddString(result_vec, result));
-            }
-            break;
-            
-        case LogicalTypeId::BOOLEAN:
-            if (columnType == DBTYPE_BOOL)
-                return Value::BOOLEAN(pColData->data.boolVal != VARIANT_FALSE);
-            else if (columnType == DBTYPE_I2)
-                return Value::BOOLEAN(pColData->data.i16Val != 0);
-            else if (columnType == DBTYPE_I4)
-                return Value::BOOLEAN(pColData->data.i32Val != 0);
-            else if (columnType == DBTYPE_I8)
-                return Value::BOOLEAN(pColData->data.i64Val != 0);
-            else if (columnType == DBTYPE_VARIANT)
-                return Value::BOOLEAN(ConvertVariantToBool(&pColData->data.varVal));
-            break;
-            
-        case LogicalTypeId::TIMESTAMP:
-            if (columnType == DBTYPE_DATE) {
-                // Convert OLE date to timestamp
-                SYSTEMTIME sysTime;
-                VariantTimeToSystemTime(pColData->data.dateVal, &sysTime);
+                break;
                 
-                date_t date = Date::FromDate(sysTime.wYear, sysTime.wMonth, sysTime.wDay);
-                dtime_t time = dtime_t(sysTime.wHour * Interval::MICROS_PER_HOUR + 
-                                      sysTime.wMinute * Interval::MICROS_PER_MINUTE + 
-                                      sysTime.wSecond * Interval::MICROS_PER_SEC);
+            case LogicalTypeId::FLOAT:
+            case LogicalTypeId::DOUBLE:
+                if (column_types[column] == MSOLAPColumnType::FLOAT) {
+                    return Value::DOUBLE(GetDouble(column));
+                }
+                break;
                 
-                return Value::TIMESTAMP(Timestamp::FromDatetime(date, time));
-            } else if (columnType == DBTYPE_VARIANT) {
-                return Value::TIMESTAMP(ConvertVariantToTimestamp(&pColData->data.varVal));
+            case LogicalTypeId::VARCHAR:
+                if (column_types[column] == MSOLAPColumnType::STRING) {
+                    Vector result_vec(LogicalType::VARCHAR);
+                    return Value(GetString(column, result_vec));
+                }
+                break;
+                
+            case LogicalTypeId::BOOLEAN:
+                if (column_types[column] == MSOLAPColumnType::BOOLEAN) {
+                    return Value::BOOLEAN(GetBoolean(column));
+                }
+                break;
+                
+            case LogicalTypeId::TIMESTAMP:
+                if (column_types[column] == MSOLAPColumnType::DATE) {
+                    return Value::TIMESTAMP(GetTimestamp(column));
+                }
+                break;
+        }
+        
+        // If we reach here, we need to use the variant fallback
+        if (column_types[column] == MSOLAPColumnType::VARIANT) {
+            VARIANT_DATA* pData = (VARIANT_DATA*)(type_buffers[column]);
+            if (pData->dwStatus != DBSTATUS_S_OK) {
+                return Value(type);
             }
-            break;
             
-        case LogicalTypeId::DECIMAL:
-            if (columnType == DBTYPE_CY)
-                return Value::DOUBLE(static_cast<double>(pColData->data.cyVal.int64) / 10000.0);
-            else if (columnType == DBTYPE_I2)
-                return Value::DOUBLE((double)pColData->data.i16Val);
-            else if (columnType == DBTYPE_I4)
-                return Value::DOUBLE((double)pColData->data.i32Val);
-            else if (columnType == DBTYPE_I8)
-                return Value::DOUBLE((double)pColData->data.i64Val);
-            else if (columnType == DBTYPE_R4)
-                return Value::DOUBLE((double)pColData->data.fltVal);
-            else if (columnType == DBTYPE_R8)
-                return Value::DOUBLE(pColData->data.dblVal);
-            else if (columnType == DBTYPE_VARIANT)
-                return Value::DOUBLE(ConvertVariantToDouble(&pColData->data.varVal));
-            break;
-            
-        default:
-            // For any type we don't handle specifically, try to convert to string
-            if (columnType == DBTYPE_VARIANT) {
-                Vector result_vec(LogicalType::VARCHAR);
-                return Value(ConvertVariantToString(&pColData->data.varVal, result_vec));
-            } else {
-                // Try to convert to string
-                std::string result = "[Unsupported Type]";
-                Vector result_vec(LogicalType::VARCHAR);
-                return Value(StringVector::AddString(result_vec, result));
+            switch (type.id()) {
+                case LogicalTypeId::SMALLINT:
+                case LogicalTypeId::INTEGER:
+                case LogicalTypeId::BIGINT:
+                    return Value::BIGINT(ConvertVariantToInt64(&pData->var));
+                    
+                case LogicalTypeId::FLOAT:
+                case LogicalTypeId::DOUBLE:
+                    return Value::DOUBLE(ConvertVariantToDouble(&pData->var));
+                    
+                case LogicalTypeId::VARCHAR:
+                {
+                    Vector result_vec(LogicalType::VARCHAR);
+                    return Value(ConvertVariantToString(&pData->var, result_vec));
+                }
+                    
+                case LogicalTypeId::BOOLEAN:
+                    return Value::BOOLEAN(ConvertVariantToBool(&pData->var));
+                    
+                case LogicalTypeId::TIMESTAMP:
+                    return Value::TIMESTAMP(ConvertVariantToTimestamp(&pData->var));
+                    
+                default:
+                {
+                    Vector result_vec(LogicalType::VARCHAR);
+                    return Value(ConvertVariantToString(&pData->var, result_vec));
+                }
             }
-            break;
+        }
+        
+        // This should not happen, but let's handle it anyway
+        throw MSOLAPException("Unsupported column type conversion");
+    } catch (const std::exception& e) {
+        throw MSOLAPException(std::string("Error getting value: ") + e.what());
     }
-    
-    // Fallback to using VARIANT conversion for unsupported combinations
-    if (columnType == DBTYPE_VARIANT) {
-        return GetVariantValue(&pColData->data.varVal, type);
-    }
-    
-    // Default to NULL if we can't handle the conversion
-    return Value(type);
 }
 
 Value MSOLAPStatement::GetVariantValue(VARIANT* var, const LogicalType& type) {
@@ -674,6 +634,146 @@ void MSOLAPStatement::FreeResources() {
     
     cColumns = 0;
     bindings.clear();
+    column_types.clear();
+    type_buffers.clear();
+    type_buffer_sizes.clear();
+}
+
+bool MSOLAPStatement::IsNull(DBORDINAL column) const {
+    if (!has_row) {
+        throw MSOLAPException("No current row");
+    }
+    
+    if (column >= cColumns) {
+        throw MSOLAPException("Column index out of range");
+    }
+    
+    // Get the status field which is at the same position for all data structures
+    DBSTATUS* pStatus = (DBSTATUS*)(type_buffers[column]);
+    return *pStatus != DBSTATUS_S_OK;
+}
+
+int64_t MSOLAPStatement::GetInt64(DBORDINAL column) const {
+    if (!has_row) {
+        throw MSOLAPException("No current row");
+    }
+    
+    if (column >= cColumns) {
+        throw MSOLAPException("Column index out of range");
+    }
+    
+    if (column_types[column] != MSOLAPColumnType::INTEGER) {
+        throw MSOLAPException("Column is not an integer type");
+    }
+    
+    INT_DATA* pData = (INT_DATA*)(type_buffers[column]);
+    if (pData->dwStatus != DBSTATUS_S_OK) {
+        return 0;
+    }
+    
+    return pData->value;
+}
+
+double MSOLAPStatement::GetDouble(DBORDINAL column) const {
+    if (!has_row) {
+        throw MSOLAPException("No current row");
+    }
+    
+    if (column >= cColumns) {
+        throw MSOLAPException("Column index out of range");
+    }
+    
+    if (column_types[column] != MSOLAPColumnType::FLOAT) {
+        throw MSOLAPException("Column is not a float type");
+    }
+    
+    FLOAT_DATA* pData = (FLOAT_DATA*)(type_buffers[column]);
+    if (pData->dwStatus != DBSTATUS_S_OK) {
+        return 0.0;
+    }
+    
+    return pData->value;
+}
+
+bool MSOLAPStatement::GetBoolean(DBORDINAL column) const {
+    if (!has_row) {
+        throw MSOLAPException("No current row");
+    }
+    
+    if (column >= cColumns) {
+        throw MSOLAPException("Column index out of range");
+    }
+    
+    if (column_types[column] != MSOLAPColumnType::BOOLEAN) {
+        throw MSOLAPException("Column is not a boolean type");
+    }
+    
+    BOOL_DATA* pData = (BOOL_DATA*)(type_buffers[column]);
+    if (pData->dwStatus != DBSTATUS_S_OK) {
+        return false;
+    }
+    
+    return pData->value != FALSE;
+}
+
+string_t MSOLAPStatement::GetString(DBORDINAL column, Vector& result_vector) const {
+    if (!has_row) {
+        throw MSOLAPException("No current row");
+    }
+    
+    if (column >= cColumns) {
+        throw MSOLAPException("Column index out of range");
+    }
+    
+    if (column_types[column] != MSOLAPColumnType::STRING) {
+        throw MSOLAPException("Column is not a string type");
+    }
+    
+    STRING_DATA* pData = (STRING_DATA*)(type_buffers[column]);
+    if (pData->dwStatus != DBSTATUS_S_OK) {
+        return string_t();
+    }
+    
+    // Convert from WCHAR to UTF-8 string
+    std::string utf8_str = BSTRToString((BSTR)pData->data);
+    return StringVector::AddString(result_vector, utf8_str);
+}
+
+timestamp_t MSOLAPStatement::GetTimestamp(DBORDINAL column) const {
+    if (!has_row) {
+        throw MSOLAPException("No current row");
+    }
+    
+    if (column >= cColumns) {
+        throw MSOLAPException("Column index out of range");
+    }
+    
+    if (column_types[column] != MSOLAPColumnType::DATE) {
+        throw MSOLAPException("Column is not a date type");
+    }
+    
+    DATE_DATA* pData = (DATE_DATA*)(type_buffers[column]);
+    if (pData->dwStatus != DBSTATUS_S_OK) {
+        return timestamp_t(0);
+    }
+    
+    // Convert DBTIMESTAMP to timestamp_t
+    SYSTEMTIME sysTime;
+    sysTime.wYear = pData->value.year;
+    sysTime.wMonth = pData->value.month;
+    sysTime.wDay = pData->value.day;
+    sysTime.wHour = pData->value.hour;
+    sysTime.wMinute = pData->value.minute;
+    sysTime.wSecond = pData->value.second;
+    sysTime.wMilliseconds = pData->value.fraction / 1000000;
+    
+    date_t date = Date::FromDate(sysTime.wYear, sysTime.wMonth, sysTime.wDay);
+    dtime_t time = dtime_t(sysTime.wHour * Interval::MICROS_PER_HOUR + 
+                          sysTime.wMinute * Interval::MICROS_PER_MINUTE + 
+                          sysTime.wSecond * Interval::MICROS_PER_SEC +
+                          pData->value.fraction / 1000);
+    
+    return Timestamp::FromDatetime(date, time);
 }
 
 } // namespace duckdb

@@ -10,22 +10,51 @@
 
 namespace duckdb {
 
-struct COLUMNDATA {
+// Type-specific column data structures
+struct INT_DATA {
     DBSTATUS dwStatus;
     DBLENGTH dwLength;
-    union {
-        INT16 i16Val;
-        INT32 i32Val;
-        INT64 i64Val;
-        float fltVal;
-        double dblVal;
-        VARIANT_BOOL boolVal;
-        DATE dateVal;
-        CY cyVal;
-        VARIANT varVal;
-        char strVal[4096]; // Buffer for string data
-        BYTE byteData[1];  // Generic byte data
-    } data;
+    INT64 value;
+};
+
+struct FLOAT_DATA {
+    DBSTATUS dwStatus;
+    DBLENGTH dwLength;
+    double value;
+};
+
+struct BOOL_DATA {
+    DBSTATUS dwStatus;
+    DBLENGTH dwLength;
+    BOOL value;
+};
+
+struct STRING_DATA {
+    DBSTATUS dwStatus;
+    DBLENGTH dwLength;
+    WCHAR data[4096]; // Use a fixed buffer size for strings
+};
+
+struct DATE_DATA {
+    DBSTATUS dwStatus;
+    DBLENGTH dwLength;
+    DBTIMESTAMP value;
+};
+
+struct VARIANT_DATA {
+    DBSTATUS dwStatus;
+    DBLENGTH dwLength;
+    VARIANT var;
+};
+
+// Enum to track the column type for each column
+enum class MSOLAPColumnType {
+    INTEGER,
+    FLOAT,
+    BOOLEAN,
+    STRING,
+    DATE,
+    VARIANT
 };
 
 class MSOLAPDB;
@@ -75,6 +104,20 @@ public:
     // Check if the statement is open
     bool IsOpen() const { return pICommand != nullptr; }
 
+    // Track the binding type for each column
+    // std::vector<BindingType> column_binding_types;
+
+    // Track the column type for each column
+    std::vector<MSOLAPColumnType> column_types;
+    
+    // New direct type access methods
+    bool IsNull(DBORDINAL column) const;
+    int64_t GetInt64(DBORDINAL column) const;
+    double GetDouble(DBORDINAL column) const;
+    string_t GetString(DBORDINAL column, Vector& result_vector) const;
+    bool GetBoolean(DBORDINAL column) const;
+    timestamp_t GetTimestamp(DBORDINAL column) const;
+
 private:
     // Set up column bindings
     void SetupBindings();
@@ -111,6 +154,10 @@ private:
     // State tracking
     bool has_row;
     bool executed;
+
+    // Data buffers for each type
+    std::vector<BYTE*> type_buffers;
+    std::vector<size_t> type_buffer_sizes;
 };
 
 } // namespace duckdb
