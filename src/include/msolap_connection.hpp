@@ -21,6 +21,13 @@ namespace duckdb {
 const CLSID CLSID_MSOLAP =
 { 0xDBC724B0, 0xDD86, 0x4772, { 0xBB, 0x5A, 0xFC, 0xC6, 0xCA, 0xB2, 0xFC, 0x1A } };
 
+// Structure for catalog data when querying for default catalog
+struct CatalogData {
+    DBSTATUS dwStatus;
+    DBLENGTH dwLength;
+    VARIANT var;
+};
+
 class MSOLAPConnection {
 public:
     MSOLAPConnection();
@@ -55,6 +62,8 @@ private:
     // Parse connection string and set properties
     void ParseConnectionString(const std::string &connection_string);
     
+    // Get default catalog if none is specified
+    std::wstring GetDefaultCatalog();
     
     // COM interfaces
     IDBInitialize* pIDBInitialize;
@@ -66,6 +75,28 @@ private:
     
     // COM initialization flag
     static bool com_initialized;
+
+    // Connection type flag
+    enum ConnectionType {
+        LOCAL_SERVER,
+        AZURE_SERVER,
+        POWERBI
+    };
+    ConnectionType conn_type;
+
+    std::wstring username;
+    std::wstring password;
+    bool integrated_security;
+    std::wstring encryption;
+    
+    // Additional properties for Azure/Power BI connections
+    std::wstring application_id;  // Application ID for AAD auth
+    std::wstring tenant_id;       // Tenant ID for AAD auth
+    std::wstring authority;       // Authority URL
+    std::wstring resource;        // Resource URL
+    std::wstring app_key;         // Application key/secret (if using app authentication)
+    std::wstring region;          // Azure region
+    std::wstring workspace;       // For Power BI: workspace name
 };
 class ComInitializer {
     public:
