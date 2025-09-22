@@ -1,7 +1,6 @@
 #define DUCKDB_EXTENSION_MAIN
 
 #include "duckdb.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
@@ -51,40 +50,25 @@ static void MsolapDummyScan(ClientContext &context, TableFunctionInput &data, Da
 // Extension loading
 //-----------------------------------------------------------------------------
 
-static void LoadInternal(DatabaseInstance &instance) {
+static void LoadInternal(ExtensionLoader &loader) {
     // Register the MSOLAP dummy function for non-Windows platforms
     TableFunction msolap_function("msolap", {LogicalType::VARCHAR, LogicalType::VARCHAR}, 
                                   MsolapDummyScan, MsolapDummyBind, MsolapDummyInitGlobalState);
     
-    ExtensionUtil::RegisterFunction(instance, msolap_function);
+    loader.RegisterFunction(msolap_function);
 }
 
-class MsolapExtension : public Extension {
-public:
-    void Load(DuckDB &db) override {
-        LoadInternal(*db.instance);
+
+static void Load(ExtensionLoader &loader){
+        LoadInternal(loader);
     }
-    
-    std::string Name() override {
-        return "msolap";
-    }
-    
-    std::string Version() const override {
-#ifdef EXT_VERSION_MSOLAP
-        return EXT_VERSION_MSOLAP;
-#else
-        return "";
-#endif
-    }
-};
 
 } // namespace duckdb
 
 extern "C" {
 
-DUCKDB_EXTENSION_API void msolap_init(duckdb::DatabaseInstance &db) {
-    duckdb::DuckDB db_wrapper(db);
-    db_wrapper.LoadExtension<duckdb::MsolapExtension>();
+DUCKDB_CPP_EXTENSION_ENTRY(msolap,loader) {
+    Load(loader);
 }
 
 DUCKDB_EXTENSION_API const char *msolap_version() {

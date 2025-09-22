@@ -4,13 +4,23 @@
 
 namespace duckdb {
 
-class MsolapExtension : public Extension {
+class ExtensionLoader;
+
+class MsolapExtension{
 public:
     // Attach the extension to the database
-    void Load(DuckDB& db) override;
+    static void Load(ExtensionLoader &loader);
     // Return the name of the extension
-    std::string Name() override;
-    std::string Version() const override;
+    static std::string Name(){
+        return "msolap";
+    }
+    static std::string Version(){
+#ifdef EXT_VERSION_MSOLAP
+        return EXT_VERSION_MSOLAP;
+#else
+        return "";
+#endif
+    }
 };
 
 } // namespace duckdb
