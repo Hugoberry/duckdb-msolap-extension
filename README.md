@@ -46,7 +46,7 @@ LOAD msolap;
 SELECT * FROM msolap('Data Source=localhost;Catalog=AdventureWorks', 'EVALUATE DimProduct');
 
 -- More complex DAX query against PowerBI Desktop instance
-SELECT * FROM msolap('Data Source=localhost:61324;Catalog=0ec50266-bdf5-4582-bc8c-82584866bcb7', 
+SELECT * FROM msolap('Data Source=localhost:50332;Catalog=6275da7e-4baf-4a67-ab68-a53226c707b0', 
 'EVALUATE
 SUMMARIZECOLUMNS(
     DimProduct[Color],
