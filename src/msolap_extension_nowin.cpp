@@ -1,5 +1,6 @@
 #define DUCKDB_EXTENSION_MAIN
 
+#include "msolap_extension.hpp"
 #include "duckdb.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -58,17 +59,22 @@ static void LoadInternal(ExtensionLoader &loader) {
     loader.RegisterFunction(msolap_function);
 }
 
+void MsolapExtension::Load(ExtensionLoader &loader) {
+    // Register the MSOLAP dummy function for non-Windows platforms
+    TableFunction msolap_function("msolap", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                 MsolapDummyScan, MsolapDummyBind, MsolapDummyInitGlobalState);
+    
+    CreateTableFunctionInfo msolap_info(msolap_function);
+    loader.RegisterFunction(msolap_info);
+}
 
-static void Load(ExtensionLoader &loader){
-        LoadInternal(loader);
-    }
 
 } // namespace duckdb
 
 extern "C" {
 
 DUCKDB_CPP_EXTENSION_ENTRY(msolap,loader) {
-    Load(loader);
+    duckdb::MsolapExtension::Load(loader);
 }
 
 DUCKDB_EXTENSION_API const char *msolap_version() {

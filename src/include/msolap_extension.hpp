@@ -18,7 +18,7 @@ public:
 #ifdef EXT_VERSION_MSOLAP
         return EXT_VERSION_MSOLAP;
 #else
-        return "";
+        return "v0.1.3";
 #endif
     }
 };
